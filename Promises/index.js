@@ -1,3 +1,6 @@
+import { NotAvailable } from "./errors.js";
+import { ExternalApi } from "./api.js";
+
 export class TranslationService {
   /**
    * Creates a new service
@@ -18,8 +21,8 @@ export class TranslationService {
    *
    */
   free(text) {
-    return this.api.fetch(text).then((translation) => {
-      return translation;
+    return this.api.fetch(text).then((result) => {
+      return result.translation;
     });
   }
 
@@ -41,7 +44,8 @@ export class TranslationService {
         const fetchPromises = texts.map((text) => this.api.fetch(text));
 
         Promise.all(fetchPromises)
-          .then((translations) => {
+          .then((results) => {
+            const translations = results.map((result) => result.translation);
             resolve(translations);
           })
           .catch((err) => {
@@ -80,7 +84,6 @@ export class TranslationService {
       tryRequest(); // Start first attempt
     });
   }
-
   /**
    * Retrieves the translation for the given text
    *
@@ -92,33 +95,28 @@ export class TranslationService {
    * @returns {Promise<string>}
    */
   premium(text, minimumQuality) {
-    return new Promise((resolve, reject) => {
-      this.api.fetch(text).then(
-        ({ translation, quality }) => {
+    const maxAttempts = 3;
+    let attempts = 0;
+
+    const fetchTranslation = () => {
+      return this.api
+        .fetch(text)
+        .then(({ translation, quality }) => {
           if (quality < minimumQuality) {
-            reject(new QualityThresholdNotMet(text)); // Reject if quality is not met
-          } else {
-            resolve(translation); // Resolve if quality is sufficient
+            return Promise.reject(new QualityThresholdNotMet(text));
           }
-        },
-        (err) => {
-          if (err instanceof NotAvailable) {
-            this.request(text)
-              .then(() => this.api.fetch(text))
-              .then(({ translation, quality }) => {
-                if (quality < minimumQuality) {
-                  reject(new QualityThresholdNotMet(text)); // Reject if quality is not met after retry
-                } else {
-                  resolve(translation); // Resolve if quality is sufficient after retry
-                }
-              })
-              .catch((err) => reject(err)); // Propagate errors if fetching fails after retry
-          } else {
-            reject(err); // Reject if fetch fails and is not 'NotAvailable'
+          return Promise.resolve(translation);
+        })
+        .catch((err) => {
+          if (err instanceof NotAvailable && attempts < maxAttempts) {
+            attempts++;
+            return this.request(text).then(fetchTranslation);
           }
-        }
-      );
-    });
+          return Promise.reject(err);
+        });
+    };
+
+    return fetchTranslation(); // Start the process
   }
 }
 
